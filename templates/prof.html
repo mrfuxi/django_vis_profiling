@@ -1,0 +1,388 @@
+{% extends "base.html" %}
+
+{% block scripts %}
+
+<script type="text/javascript">
+  var json_data = {{ json_data|safe }};
+  var total_time = {{ total_time }};
+
+  $(window).load(function () {
+    show_pie_chart(json_data.pie, "#chart");
+    show_bar_chart(json_data.bars, "#bars");
+    show_call_graph(json_data.calls, "#calls");
+  });
+</script>
+
+<script type="text/javascript" charset="utf-8">
+function show_pie_chart(data, selector) {
+  var width = $(window).height();
+  var height = $(window).height();
+  var radius = Math.min(width, height) / 2;
+
+  var m_scale = 1;
+
+  var x = d3.scale.linear().range([0, 2 * Math.PI]);
+
+  var y = d3.scale.linear().range([0, radius*m_scale]);
+
+  var color = d3.scale.linear().domain([0,
+                                        total_time*0.25,
+                                        total_time*0.30,
+                                        total_time*0.50,
+                                        total_time])
+                               .range([d3.rgb("blue"),
+                                       d3.rgb("skyblue"),
+                                       d3.rgb("green"),
+                                       d3.rgb("yellow"),
+                                       d3.rgb("red")]);
+
+  var svg = d3.select(selector).append("svg")
+      .attr("width", width)
+      .attr("height", height)
+    .append("g")
+      .attr("transform", "translate(" + width / 2 + "," + (height / 2 + 10) + ")");
+
+  var partition = d3.layout.partition();
+
+  var arc = d3.svg.arc()
+      .startAngle(function(d) {
+        return Math.max(0, Math.min(2 * Math.PI, x(d.x)));
+      })
+      .endAngle(function(d) {
+        return Math.max(0, Math.min(2 * Math.PI, x(d.x + d.dx)));
+      })
+      .innerRadius(function(d) {
+        return Math.max(0, y(d.y));
+      })
+      .outerRadius(function(d,i) {
+        return Math.max(0, y(d.y + d.dy));
+      });
+
+  var path = svg.selectAll("path")
+      .data(partition.nodes(data))
+      .enter()
+      .append("path")
+        .filter(function(d) {
+          if (d.inline)
+          {
+            return d.value > 0.001;
+          }
+
+          return d.value > 0.002;
+        })
+        .attr("d", arc)
+        .style("fill", function(d, i) {
+          time = get_time(d);
+
+          if (time) {
+            return color(time);
+          }
+
+          return d3.rgb("black");
+        })
+        .on("click", click);
+
+    path.append("svg:title")
+      .text(create_tooltip);
+
+    function click(d) {
+      path.transition()
+        .duration(750)
+        .attrTween("d", arcTween(d));
+    }
+
+  // Interpolate the scales!
+  function arcTween(d) {
+    var xd = d3.interpolate(x.domain(), [d.x, d.x + d.dx]),
+        yd = d3.interpolate(y.domain(), [d.y, 1]),
+        yr = d3.interpolate(y.range(), [d.y ? 15 : 0, radius*m_scale]);
+    return function(d, i) {
+      return i
+          ? function(t) { return arc(d); }
+          : function(t) { x.domain(xd(t)); y.domain(yd(t)).range(yr(t)); return arc(d); };
+    };
+  }
+}
+
+function show_bar_chart(data, selector, threshold_prcent) {
+  var bar_size = 20;
+  var gap = 5;
+
+  if (!threshold_prcent) {
+    threshold_prcent = 0.1;
+  }
+
+  var sorted_data = data.sort(function (a, b) {
+    return b.cumtime - a.cumtime;
+  }).filter(function (d) {
+    return 100*d.cumtime/total_time >= threshold_prcent;
+  });
+
+  var width = $(window).width() * 0.75;
+  var height = sorted_data.length * (bar_size + gap);
+
+  var x = d3.scale.linear()
+          .domain([0, total_time])
+          .range([0, width/2]);
+
+  var svg = d3.select(selector).append("svg")
+      .attr("width", width)
+      .attr("height", height)
+    .append("g");
+
+  var state = svg.selectAll(".state")
+      .data(sorted_data)
+    .enter().append("g")
+      .attr("class", "bar_entry")
+      .attr("transform", function(d, i) { return "translate(0," + i*(bar_size + gap) + ")"; });
+
+  //Add background
+  state.append("rect")
+      .attr("class", "bar_back")
+      .attr("height", bar_size)
+      .attr("width", "100%");
+
+  var max_x = x(total_time);
+
+  //Add call time
+  state.append("rect")
+      .attr("class", "call_bar")
+      .attr("height", bar_size)
+      .attr("x", function (d) {
+        return max_x - x(d.cumtime-d.tottime);
+      })
+      .attr("width", function (d) {
+        return x(d.cumtime-d.tottime);
+      });
+
+  //Add inline time
+  state.append("rect")
+      .attr("class", "inline_bar")
+      .attr("height", bar_size)
+      .attr("width", function (d) {
+        return x(d.tottime);
+      })
+      .attr("x", function (d) {
+        return max_x - x(d.cumtime-d.tottime) - x(d.tottime);
+      });
+
+  //Add desciption
+  var text_location = x(total_time) + 10;
+
+  state.append("text")
+      .attr("class", "desciption")
+      .attr("x", text_location)
+      .attr("height", bar_size)
+      .attr("y", bar_size)
+      .attr("dy", -2)
+      .text(function (d) {
+        return d.short_name;
+      });
+
+  state.append("svg:title").text(create_tooltip);
+}
+
+function create_tooltip(d) {
+  var tooltip = ""
+
+  var time = get_time(d);
+
+  if (d.short_name) {
+    tooltip += "Name: "+ d.short_name;
+  }
+
+  if (time) {
+    if (tooltip && tooltip.substr(tooltip.length-2) != "\n\n")
+    {
+      tooltip += "\n\n";
+    }
+    tooltip += "Percent: " + (100*time/total_time).toFixed(1);
+  }
+
+  if (d.cumtime) {
+    tooltip += "\n\n";
+
+    if (!d.inline) {
+      tooltip += "Cumulative: " + d.cumtime + "\n";
+    }
+
+    if (d.tottime) {
+      tooltip += "Inline: " + d.tottime + "\n";
+    }
+
+    if (!d.inline && d.tottime && d.cumtime != d.tottime) {
+      tooltip += "Call time: " + (d.cumtime - d.tottime) + "\n";
+    }
+
+    if (d.ncalls) {
+      tooltip += "calls : " + d.ncalls;
+
+      if (d.ncalls != d.pcalls)
+      {
+        tooltip += "/" + d.pcalls;
+      }
+    }
+  }
+
+  if (d.name) {
+    if (tooltip.substr(tooltip.length-2) != "\n\n")
+    {
+      tooltip += "\n\n";
+    }
+
+    tooltip += "Full name: " + d.name;
+  }
+
+  return tooltip.replace("\n\n\n\n", "\n\n");
+}
+
+function get_time(d) {
+  time = null;
+
+  if (d.inline) {
+    time = d.tottime;
+  } 
+  else if (d.cumtime) {
+    time = d.cumtime;
+  }
+
+  return time;
+}
+
+function show_call_graph(data, selector) {
+  /*
+  http://bl.ocks.org/mbostock/1138500
+  */
+
+  var width = $(window).width() * 0.95;
+  var height = width;
+  var radius = 10;
+  var fill = d3.scale.linear().domain([0,
+                                        total_time*0.25,
+                                        total_time*0.30,
+                                        total_time*0.50,
+                                        total_time])
+                               .range([d3.rgb("blue"),
+                                       d3.rgb("skyblue"),
+                                       d3.rgb("green"),
+                                       d3.rgb("yellow"),
+                                       d3.rgb("red")]);
+
+  var force = d3.layout.force()
+    .charge(-400)
+    .linkDistance(radius*12)
+    .size([width, height]);
+
+  var svg = d3.select(selector).append("svg:svg")
+    .attr("width", width)
+    .attr("height", height);
+
+  svg.append("svg:defs")
+    .append("svg:marker")
+      .attr("id", "arrow_head")
+      .attr("orient", "auto")
+      .attr("markerWidth", radius)
+      .attr("markerHeight", radius)
+      .attr("refX", radius)
+      .attr("refY", radius/4)
+      .append("svg:path")
+        .attr("d", "M 0 0 L " + radius/2 + " " + radius/4 + " L 0 " + radius/2 + " z");
+
+  var link = svg.selectAll("line")
+      .data(data.links)
+    .enter().append("svg:line")
+      .attr("marker-end", "url(#arrow_head)")
+      .attr("stroke-width", 2)
+      .style("stroke", function(d) { return fill(d.value); });
+
+  var node = svg.selectAll("circle")
+      .data(data.nodes)
+    .enter().append("svg:circle")
+      .attr("r", radius - 0.75)
+      .style("fill", function(d) {
+        time = get_time(d);
+        
+        if (time) {
+            return fill(time);
+        }
+
+        return d3.rgb("black");
+      })
+      .style("stroke", function(d) {
+        time = get_time(d);
+        
+        if (time) {
+            return d3.rgb(fill(time)).darker();
+        }
+
+        return d3.rgb("black");
+      })
+      .call(force.drag);
+
+  node.append("svg:title").text(create_tooltip);
+
+  force
+      .nodes(data.nodes)
+      .links(data.links)
+      .on("tick", tick)
+      .start();
+
+  function tick(e) {
+
+    // Push sources up and targets down to form a weak tree.
+    var k = 10 * e.alpha;
+    data.links.forEach(function(d, i) {
+      d.source.y -= k;
+      d.target.y += k;
+    });
+
+    node.attr("cx", function(d) { return d.x; })
+        .attr("cy", function(d) { return d.y; });
+
+    link.attr("x1", function(d) { return d.source.x; })
+        .attr("y1", function(d) { return d.source.y; })
+        .attr("x2", function(d) { return d.target.x; })
+        .attr("y2", function(d) { return d.target.y; });
+  }
+}
+</script>
+
+{% endblock %}
+
+{% block styles %}
+<style type="text/css">
+  #chart path {
+    stroke: black;
+    stroke-width: 1;
+  }
+
+  g rect {
+    fill: white;
+  }
+
+  .bar_back {
+    fill: #EEEEEE;
+  }
+
+  .call_bar {
+    fill: blue;
+  }
+
+  .inline_bar {
+    fill: red;
+  }
+
+  .desciption {
+    font-size: 22px;
+  }
+
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="vis">
+  <div id="chart"></div>
+  <div id="bars"></div>
+  <div id="calls"></div>
+</div>
+{% endblock %}
