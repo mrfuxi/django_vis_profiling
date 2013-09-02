@@ -13,7 +13,7 @@ import pstats
 import marshal
 from cStringIO import StringIO
 
-from stats_parser import pstats_to_json
+from views import _render_profile
 
 
 class cProfileMiddleware(object):
@@ -84,12 +84,6 @@ class cProfileMiddleware(object):
             self.profiler.create_stats()
             stats = pstats.Stats(self.profiler)
 
-            json_data = pstats_to_json(stats)
-
-            return render(request, 'prof.html', {
-                'json_data': json_data,
-                'total_time': stats.total_tt,
-                'page_title': 'Request profiler',
-            })
+            return _render_profile(request, stats)
 
         return response

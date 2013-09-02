@@ -25,7 +25,7 @@ def pstats_to_json(stats):
         "calls": calls,
     }
 
-    return graphs
+    return graphs, stats.total_tt
 
 
 def tuple_to_key(data, force_simple=False):
